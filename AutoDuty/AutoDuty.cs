@@ -85,6 +85,7 @@ public sealed class AutoDuty : IDalamudPlugin
 
     internal static string Name => "AutoDuty";
     internal static AutoDuty Plugin { get; private set; }
+    internal static MultiboxManager? MultiboxManager { get; private set; }
     internal bool StopForCombat = true;
     internal DirectoryInfo PathsDirectory;
     internal FileInfo AssemblyFileInfo;
@@ -127,7 +128,7 @@ public sealed class AutoDuty : IDalamudPlugin
                     break;
                 case Stage.Reading_Path:
                     if(this._stage is not Stage.Waiting_For_Combat and not Stage.Revived and not Stage.Looping)
-                        ConfigurationMain.MultiboxUtility.MultiboxBlockingNextStep = true;
+                        MultiboxManager?.SetStepBlocking(true);
                     break;
             }
             _stage = value;
@@ -260,6 +261,7 @@ public sealed class AutoDuty : IDalamudPlugin
             _squadronManager     = new(TaskManager);
             _variantManager      = new(TaskManager);
             _actions             = new(Plugin, TaskManager);
+            MultiboxManager      = new();
             BuildTab.ActionsList = _actions.ActionsList;
             OverrideCamera       = new();
             Overlay              = new();
@@ -675,7 +677,7 @@ public sealed class AutoDuty : IDalamudPlugin
             } else
             {
                 if(!isDuty)
-                    ConfigurationMain.MultiboxUtility.Server.ExitDuty();
+                    MultiboxManager?.ExitDuty();
             }
         }
 
@@ -975,7 +977,7 @@ public sealed class AutoDuty : IDalamudPlugin
             TaskManager.Enqueue(() => PlayerHelper.IsReadyFull, "Loop-WaitIsReadyFull");
         }
 
-        ConfigurationMain.MultiboxUtility.MultiboxBlockingNextStep = true;
+        MultiboxManager?.SetStepBlocking(true);
 
         if (!queue)
         {
@@ -1034,7 +1036,7 @@ public sealed class AutoDuty : IDalamudPlugin
                                                                TaskManager.Enqueue(() => VNavmesh_IPCSubscriber.Nav_IsReady(), int.MaxValue, "Loop-WaitNavReady");
                                                                TaskManager.Enqueue(() => Svc.Log.Debug($"StartNavigation"));
                                                                TaskManager.Enqueue(() => StartNavigation(true), "Loop-StartNavigation");
-                                                           }, () => !ConfigurationMain.MultiboxUtility.MultiboxBlockingNextStep);
+                                                           }, () => !(MultiboxManager?.StepBlocking ?? false));
     }
 
     private void LoopsCompleteActions()
@@ -1189,7 +1191,7 @@ public sealed class AutoDuty : IDalamudPlugin
         if (!PlayerHelper.IsValid || !EzThrottler.Check("PathFindFailure") || Indexer == -1 || Indexer >= Actions.Count)
             return;
 
-        if (ConfigurationMain.MultiboxUtility.MultiboxBlockingNextStep)
+        if (MultiboxManager?.StepBlocking ?? false)
         {
             if (PartyHelper.PartyInCombat() && Plugin.StopForCombat)
             {
@@ -1249,7 +1251,7 @@ public sealed class AutoDuty : IDalamudPlugin
             return;
         }
 
-        ConfigurationMain.MultiboxUtility.MultiboxBlockingNextStep = false;
+        MultiboxManager?.SetStepBlocking(false);
 
         if (PathAction.Position == Vector3.Zero)
         {
@@ -1836,7 +1838,7 @@ public sealed class AutoDuty : IDalamudPlugin
     {
         GitHubHelper.Dispose();
         StopAndResetALL();
-        ConfigurationMain.Instance.MultiBox =  false;
+        MultiboxManager?.Dispose();
         Svc.Framework.Update                -= Framework_Update;
         Svc.Framework.Update                -= SchedulerHelper.ScheduleInvoker;
         FileHelper.FileSystemWatcher.Dispose();

@@ -228,7 +228,7 @@ namespace AutoDuty.Helpers
                 AddonHelper.FireCallBack((AtkUnitBase*)_addonContentsFinder, true, 12, 0);
 
                 if(ConfigurationMain.Instance.MultiBox && ConfigurationMain.Instance.host)
-                    ConfigurationMain.MultiboxUtility.Server.Queue();
+                    AutoDuty.MultiboxManager?.QueueDuty();
                 return;
             }
             Svc.Log.Debug("end");

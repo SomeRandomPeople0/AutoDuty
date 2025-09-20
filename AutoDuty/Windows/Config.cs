@@ -14,6 +14,7 @@ using Serilog.Events;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Numerics;
 using static AutoDuty.Helpers.RepairNPCHelper;
 using static AutoDuty.Windows.ConfigTab;
 
@@ -96,20 +97,68 @@ public class ConfigurationMain
     internal bool multiBox = false;
     public bool MultiBox
     {
-        get => Plugin.isDev && this.multiBox;
+        get => this.multiBox;
         set
         {
             if (this.multiBox == value)
                 return;
             this.multiBox = value;
 
-            MultiboxUtility.Set(this.multiBox);
+            if (AutoDuty.MultiboxManager != null)
+            {
+                if (this.multiBox)
+                {
+                    AutoDuty.MultiboxManager.Initialize(this.host, this.multiboxPort, this.multiboxHostAddress);
+                    AutoDuty.MultiboxManager.Start();
+                }
+                else
+                {
+                    AutoDuty.MultiboxManager.Stop();
+                }
+            }
         }
     }
 
     [JsonProperty]
     internal bool host = false;
 
+    [JsonProperty]
+    internal int multiboxPort = 7401;
+    public int MultiboxPort
+    {
+        get => this.multiboxPort;
+        set
+        {
+            if (this.multiboxPort != value)
+            {
+                this.multiboxPort = value;
+                if (AutoDuty.MultiboxManager != null && this.multiBox)
+                {
+                    AutoDuty.MultiboxManager.Initialize(this.host, this.multiboxPort, this.multiboxHostAddress);
+                }
+            }
+        }
+    }
+
+    [JsonProperty]
+    internal string multiboxHostAddress = "127.0.0.1";
+    public string MultiboxHostAddress
+    {
+        get => this.multiboxHostAddress;
+        set
+        {
+            if (this.multiboxHostAddress != value)
+            {
+                this.multiboxHostAddress = value;
+                if (AutoDuty.MultiboxManager != null && this.multiBox)
+                {
+                    AutoDuty.MultiboxManager.Initialize(this.host, this.multiboxPort, this.multiboxHostAddress);
+                }
+            }
+        }
+    }
+
+    [Obsolete("Legacy multibox implementation - replaced by MultiboxManager")]
     public class MultiboxUtility
     {
         private const int    BUFFER_SIZE            = 4096;
@@ -1244,6 +1293,7 @@ public static class ConfigTab
 
     private static bool overlayHeaderSelected      = false;
     private static bool devHeaderSelected          = false;
+    private static bool multiboxHeaderSelected     = false;
     private static bool dutyConfigHeaderSelected   = false;
     private static bool bmaiSettingHeaderSelected  = false;
     private static bool wrathSettingHeaderSelected = false;
@@ -1489,6 +1539,147 @@ public static class ConfigTab
             
         }
 
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.PushStyleVar(ImGuiStyleVar.SelectableTextAlign, new Vector2(0.5f, 0.5f));
+        var multiboxHeader = ImGui.Selectable("Multibox Settings", multiboxHeaderSelected, ImGuiSelectableFlags.DontClosePopups);
+        ImGui.PopStyleVar();
+        if (ImGui.IsItemHovered())
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        if (multiboxHeader)
+            multiboxHeaderSelected = !multiboxHeaderSelected;
+
+        if (multiboxHeaderSelected)
+        {
+            bool multiBox = ConfigurationMain.Instance.multiBox;
+            if (ImGui.Checkbox("Enable Multibox", ref multiBox))
+            {
+                ConfigurationMain.Instance.MultiBox = multiBox;
+                Configuration.Save();
+            }
+            ImGuiEx.TextWrapped("Enable multibox functionality");
+
+            if (ConfigurationMain.Instance.MultiBox)
+            {
+                ImGui.Indent();
+
+                bool isHost = ConfigurationMain.Instance.host;
+                if (ImGui.Checkbox("Host", ref isHost))
+                {
+                    ConfigurationMain.Instance.host = isHost;
+                    Configuration.Save();
+                }
+                ImGuiEx.TextWrapped("The Host controls the path state and synchronizes clients. Only one instance should be the host.");
+
+                ImGui.Spacing();
+
+                int port = ConfigurationMain.Instance.MultiboxPort;
+                if (ImGui.InputInt("Port", ref port))
+                {
+                    if (port > 0 && port <= 65535)
+                    {
+                        ConfigurationMain.Instance.MultiboxPort = port;
+                        Configuration.Save();
+                    }
+                }
+                ImGuiEx.TextWrapped("TCP port for multibox communication");
+
+                if (!ConfigurationMain.Instance.host)
+                {
+                    string hostAddress = ConfigurationMain.Instance.MultiboxHostAddress;
+                    if (ImGui.InputText("Host Address", ref hostAddress, 256))
+                    {
+                        ConfigurationMain.Instance.MultiboxHostAddress = hostAddress;
+                        Configuration.Save();
+                    }
+                    ImGuiEx.TextWrapped("Address of the host");
+                }
+
+                ImGui.Spacing();
+
+                // Status display
+                if (AutoDuty.MultiboxManager != null)
+                {
+                    if (AutoDuty.MultiboxManager.IsEnabled)
+                    {
+                        ImGuiEx.Text($"Status: Connected as {(AutoDuty.MultiboxManager.IsHost ? "Host" : "Client")}");
+
+                        if (AutoDuty.MultiboxManager.IsHost)
+                        {
+                            var connectedClients = AutoDuty.MultiboxManager.ConnectedClients;
+                            ImGuiEx.Text($"Connected Clients ({connectedClients.Count}):");
+                            ImGui.Indent();
+
+                            if (connectedClients.Count == 0)
+                            {
+                                ImGui.TextColored(new Vector4(0.5f, 0.5f, 0.5f, 1.0f), "No clients connected");
+                            }
+                            else
+                            {
+                                var keepAliveStatus = AutoDuty.MultiboxManager.ClientKeepAlive;
+
+                                foreach (var (clientId, clientInfo) in connectedClients)
+                                {
+                                    bool inParty = PartyHelper.IsPartyMember(clientInfo.CID);
+                                    var partyStatus = inParty ? "In Party" : "Not in Party";
+                                    var statusColor = inParty ? 0xFF00FF00 : 0xFF808080; // Green if in party, gray if not
+
+                                    // Calculate last keepalive time
+                                    var lastKeepAlive = keepAliveStatus.TryGetValue(clientId, out var keepAliveTime)
+                                        ? DateTime.Now.Subtract(keepAliveTime).TotalSeconds
+                                        : -1;
+
+                                    var connectionStatus = lastKeepAlive < 0 ? "Unknown" :
+                                                         lastKeepAlive < 15 ? "Good" :
+                                                         lastKeepAlive < 30 ? "Slow" : "Timeout";
+
+                                    var connectionColor = lastKeepAlive < 15 ? new Vector4(0.0f, 1.0f, 0.0f, 1.0f) : // Green for good
+                                                         lastKeepAlive < 30 ? new Vector4(1.0f, 1.0f, 0.0f, 1.0f) : // Yellow for slow
+                                                         new Vector4(1.0f, 0.0f, 0.0f, 1.0f); // Red for timeout
+
+                                    var partyColor = inParty ? new Vector4(0.0f, 1.0f, 0.0f, 1.0f) : new Vector4(0.5f, 0.5f, 0.5f, 1.0f);
+
+                                    ImGuiEx.Text($"• {clientInfo.Name}");
+                                    ImGui.SameLine();
+                                    ImGui.TextColored(partyColor, $"[{partyStatus}]");
+                                    ImGui.SameLine();
+                                    ImGui.TextColored(connectionColor, $"({connectionStatus})");
+
+                                    if (ImGui.IsItemHovered())
+                                    {
+                                        ImGui.BeginTooltip();
+                                        ImGui.Text($"Character: {clientInfo.Name}");
+                                        ImGui.Text($"Character ID: {clientInfo.CID}");
+                                        ImGui.Text($"World ID: {clientInfo.WorldId}");
+                                        ImGui.Text($"Client ID: {clientId.Substring(0, 8)}...");
+                                        if (lastKeepAlive >= 0)
+                                            ImGui.Text($"Last keepalive: {lastKeepAlive:F1}s ago");
+                                        ImGui.Text($"Party status: {partyStatus}");
+                                        ImGui.EndTooltip();
+                                    }
+                                }
+                            }
+
+                            ImGui.Unindent();
+                        }
+                    }
+                    else
+                    {
+                        ImGuiEx.Text("Status: Disconnected");
+                        if (ImGui.Button("Connect"))
+                        {
+                            AutoDuty.MultiboxManager.Initialize(ConfigurationMain.Instance.host,
+                                                            ConfigurationMain.Instance.MultiboxPort,
+                                                            ConfigurationMain.Instance.MultiboxHostAddress);
+                            AutoDuty.MultiboxManager.Start();
+                        }
+                    }
+                }
+
+                ImGui.Unindent();
+            }
+        }
+
         if (Plugin.isDev)
         {
             ImGui.Separator();
@@ -1506,29 +1697,6 @@ public static class ConfigTab
                 if (ImGui.Checkbox("Update Paths on startup", ref ConfigurationMain.Instance.updatePathsOnStartup))
                     Configuration.Save();
 
-                bool multiBox = ConfigurationMain.Instance.multiBox;
-                if (ImGui.Checkbox(nameof(ConfigurationMain.MultiBox), ref multiBox))
-                {
-                    ConfigurationMain.Instance.MultiBox = multiBox;
-                    Configuration.Save();
-                }
-
-                if (ImGui.Checkbox(nameof(ConfigurationMain.host), ref ConfigurationMain.Instance.host))
-                    Configuration.Save();
-
-                if(ConfigurationMain.Instance.MultiBox && ConfigurationMain.Instance.host)
-                {
-                    ImGui.Indent();
-                    for (int i = 0; i < ConfigurationMain.MultiboxUtility.Server.MAX_SERVERS; i++)
-                    {
-                        ConfigurationMain.MultiboxUtility.Server.ClientInfo? info = ConfigurationMain.MultiboxUtility.Server.clients[i];
-
-                        ImGuiEx.Text(info != null ?
-                                         $"Client {i}: {(PartyHelper.IsPartyMember(info.CID) ? "in party" : "no party")} | {DateTime.Now.Subtract(ConfigurationMain.MultiboxUtility.Server.keepAlives[i]).TotalSeconds:F3}s ago" :
-                                         $"Client {i}: No Info");
-                    }
-                    ImGui.Unindent();
-                }
 
 
                 if (ImGui.Button("Print mod list")) 

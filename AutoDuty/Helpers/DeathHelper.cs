@@ -23,7 +23,7 @@ namespace AutoDuty.Helpers
             set
             {
                 if(_deathState != value)
-                    ConfigurationMain.MultiboxUtility.IsDead(value == PlayerLifeState.Dead);
+                    AutoDuty.MultiboxManager?.ReportDeath(value == PlayerLifeState.Dead);
 
                 if (value == PlayerLifeState.Dead)
                 {
